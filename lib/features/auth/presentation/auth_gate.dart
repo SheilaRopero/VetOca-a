@@ -1,4 +1,3 @@
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import '../../clinic/presentation/clinic_home_screen.dart';
 import '../../pets/presentation/owner_home_screen.dart';
@@ -13,26 +12,31 @@ class AuthGate extends StatelessWidget {
   Widget build(BuildContext context) {
     final repo = AuthRepository();
 
-    return StreamBuilder<User?>(
+    return StreamBuilder(
       stream: repo.authChanges(),
       builder: (context, authSnap) {
         if (authSnap.connectionState == ConnectionState.waiting) {
-          return const _Loading();
+          return const _Splash();
         }
         final firebaseUser = authSnap.data;
-        if (firebaseUser == null) return const AuthScreen();
+        if (firebaseUser == null) {
+          return const AuthScreen();
+        }
 
-        return StreamBuilder<AppUser?>(
+        return StreamBuilder(
           stream: repo.profileChanges(firebaseUser.uid),
-          builder: (context, profileSnap) {
-            final profile = profileSnap.data;
-            if (profile == null) {
-              return _Loading(onSignOut: repo.signOut);
+          builder: (context, userSnap) {
+            if (userSnap.connectionState == ConnectionState.waiting) {
+              return const _Splash();
             }
-            return switch (profile.role) {
-              UserRole.owner => OwnerHomeScreen(user: profile),
-              UserRole.vet || UserRole.admin => ClinicHomeScreen(user: profile),
-            };
+            final appUser = userSnap.data;
+            if (appUser == null) {
+              return const _Splash(label: 'Preparando tu cuenta...');
+            }
+
+            return appUser.role == UserRole.vet
+                ? ClinicHomeScreen(user: appUser)
+                : OwnerHomeScreen(user: appUser);
           },
         );
       },
@@ -40,10 +44,9 @@ class AuthGate extends StatelessWidget {
   }
 }
 
-class _Loading extends StatelessWidget {
-  const _Loading({this.onSignOut});
-
-  final VoidCallback? onSignOut;
+class _Splash extends StatelessWidget {
+  const _Splash({this.label});
+  final String? label;
 
   @override
   Widget build(BuildContext context) {
@@ -53,12 +56,9 @@ class _Loading extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             const CircularProgressIndicator(),
-            if (onSignOut != null) ...[
+            if (label != null) ...[
               const SizedBox(height: 16),
-              TextButton(
-                onPressed: onSignOut,
-                child: const Text('Cerrar sesión'),
-              ),
+              Text(label!),
             ],
           ],
         ),

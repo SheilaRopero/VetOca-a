@@ -25,19 +25,55 @@ class AuthRepository {
     required String phone,
     required String email,
     required String password,
+    UserRole role = UserRole.owner,
+    String? clinicName,
+    String? clinicAddress,
+    int consultPrice = 45000,
+    bool onDuty = false,
   }) async {
     final cred = await _auth.createUserWithEmailAndPassword(
       email: email.trim(),
       password: password,
     );
-    // Todo registro nuevo entra como propietario (lo exigen las reglas).
-    final user = AppUser(
-      id: cred.user!.uid,
-      role: UserRole.owner,
-      name: name.trim(),
-      phone: phone.trim(),
-    );
-    await _db.collection('users').doc(user.id).set(user.toMap());
+
+    final uid = cred.user!.uid;
+    String? createdClinicId;
+
+    // 1. Primero guardamos el usuario para que las reglas reconozcan isVet()
+    final userRef = _db.collection('users').doc(uid);
+
+    if (role == UserRole.vet) {
+      final clinicRef = _db.collection('clinics').doc();
+      createdClinicId = clinicRef.id;
+
+      await userRef.set(AppUser(
+        id: uid,
+        role: UserRole.vet,
+        name: name.trim(),
+        phone: phone.trim(),
+        clinicId: createdClinicId,
+      ).toMap());
+
+      await clinicRef.set({
+        'name': (clinicName ?? '').trim().isEmpty
+            ? name.trim()
+            : clinicName!.trim(),
+        'address': (clinicAddress ?? '').trim().isEmpty
+            ? 'Ocaña, Norte de Santander'
+            : clinicAddress!.trim(),
+        'phone': phone.trim(),
+        'onDuty': onDuty,
+        'closesAt': '6:00 p. m.',
+        'consultPrice': consultPrice,
+      });
+    } else {
+      await userRef.set(AppUser(
+        id: uid,
+        role: UserRole.owner,
+        name: name.trim(),
+        phone: phone.trim(),
+      ).toMap());
+    }
   }
 
   Future<void> signOut() => _auth.signOut();

@@ -44,6 +44,15 @@ class _TriageScreenState extends State<TriageScreen> {
   String get _daysLabel =>
       _days == 0 ? 'Empezó hoy' : _days == 1 ? 'Empezó hace 1 día' : 'Empezó hace $_days días';
 
+  void _updateIntensityFromOffset(double dx, double totalWidth) {
+    if (totalWidth <= 0) return;
+    final ratio = (dx / totalWidth).clamp(0.0, 0.999);
+    final level = (ratio * 5).floor() + 1;
+    if (level != _intensity) {
+      setState(() => _intensity = level);
+    }
+  }
+
   void _continue() {
     if (_selected.isEmpty) {
       setState(() => _error = 'Marca al menos un síntoma.');
@@ -147,28 +156,49 @@ class _TriageScreenState extends State<TriageScreen> {
                                       fontWeight: FontWeight.w600)),
                             ],
                           ),
-                          const SizedBox(height: 10),
-                          Row(
-                            children: [
-                              for (var i = 1; i <= 5; i++)
-                                Expanded(
-                                  child: GestureDetector(
-                                    onTap: () => setState(() => _intensity = i),
-                                    child: Container(
-                                      height: 12,
-                                      margin: EdgeInsets.only(right: i == 5 ? 0 : 6),
-                                      decoration: BoxDecoration(
-                                        color: i <= _intensity
-                                            ? AppColors.primary
-                                            : AppColors.border,
-                                        borderRadius: BorderRadius.circular(6),
-                                      ),
+                          const SizedBox(height: 4),
+                          LayoutBuilder(
+                            builder: (context, constraints) {
+                              return MouseRegion(
+                                cursor: SystemMouseCursors.click,
+                                child: GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onTapDown: (d) => _updateIntensityFromOffset(
+                                      d.localPosition.dx, constraints.maxWidth),
+                                  onHorizontalDragUpdate: (d) =>
+                                      _updateIntensityFromOffset(
+                                          d.localPosition.dx,
+                                          constraints.maxWidth),
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                        vertical: 10),
+                                    child: Row(
+                                      children: [
+                                        for (var i = 1; i <= 5; i++)
+                                          Expanded(
+                                            child: AnimatedContainer(
+                                              duration: const Duration(
+                                                  milliseconds: 150),
+                                              height: 12,
+                                              margin: EdgeInsets.only(
+                                                  right: i == 5 ? 0 : 6),
+                                              decoration: BoxDecoration(
+                                                color: i <= _intensity
+                                                    ? AppColors.primary
+                                                    : AppColors.border,
+                                                borderRadius:
+                                                BorderRadius.circular(6),
+                                              ),
+                                            ),
+                                          ),
+                                      ],
                                     ),
                                   ),
                                 ),
-                            ],
+                              );
+                            },
                           ),
-                          const SizedBox(height: 10),
+                          const SizedBox(height: 4),
                           Row(
                             children: [
                               const Icon(Icons.schedule,

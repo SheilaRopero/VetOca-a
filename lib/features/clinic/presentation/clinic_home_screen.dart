@@ -3,11 +3,10 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/utils/date_format.dart';
 import '../../appointments/data/appointment_repository.dart';
 import '../../appointments/models/appointment.dart';
-import '../../appointments/models/triage.dart';
 import '../../auth/data/auth_repository.dart';
 import '../../auth/models/app_user.dart';
+import '../../chat/presentation/chat_screen.dart';
 import '../data/clinic_repository.dart';
-import '../models/clinic.dart';
 
 class ClinicHomeScreen extends StatefulWidget {
   const ClinicHomeScreen({super.key, required this.user});
@@ -19,10 +18,10 @@ class ClinicHomeScreen extends StatefulWidget {
 }
 
 class _ClinicHomeScreenState extends State<ClinicHomeScreen> {
-  final _appointments = AppointmentRepository();
   final _clinics = ClinicRepository();
-  Stream<List<Appointment>>? _apptStream;
-  Stream<Clinic?>? _clinicStream;
+  final _appointments = AppointmentRepository();
+  final _auth = AuthRepository();
+
   late DateTime _day;
 
   @override
@@ -30,58 +29,35 @@ class _ClinicHomeScreenState extends State<ClinicHomeScreen> {
     super.initState();
     final now = DateTime.now();
     _day = DateTime(now.year, now.month, now.day);
-    final clinicId = widget.user.clinicId;
-    if (clinicId != null && clinicId.isNotEmpty) {
-      _apptStream = _appointments.watchClinicAppointments(clinicId);
-      _clinicStream = _clinics.watchOne(clinicId);
-    }
   }
 
-  bool _sameDay(DateTime a, DateTime b) =>
-      a.year == b.year && a.month == b.month && a.day == b.day;
+  void _shiftDay(int delta) {
+    setState(() => _day = _day.add(Duration(days: delta)));
+  }
 
-  bool get _isToday => _sameDay(_day, DateTime.now());
-
-  void _shiftDay(int delta) =>
-      setState(() => _day = _day.add(Duration(days: delta)));
-
-  void _openDetail(Appointment a) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (sheetContext) => _DetailSheet(
-        appointment: a,
-        onComplete: () async {
-          try {
-            await _appointments.updateStatus(a.id, AppointmentStatus.completed);
-          } catch (_) {
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('No se pudo actualizar la cita.')),
-              );
-            }
-          }
-          if (sheetContext.mounted) Navigator.pop(sheetContext);
-        },
-      ),
-    );
+  String _dayHeader(DateTime d) {
+    final now = DateTime.now();
+    final isToday =
+        d.year == now.year && d.month == now.month && d.day == now.day;
+    return isToday ? 'Hoy · ${formatShortDate(d)}' : formatShortDate(d);
   }
 
   @override
   Widget build(BuildContext context) {
+    final clinicId = widget.user.clinicId;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Panel clínica'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.logout),
             tooltip: 'Cerrar sesión',
-            onPressed: () => AuthRepository().signOut(),
+            icon: const Icon(Icons.logout),
+            onPressed: () => _auth.signOut(),
           ),
         ],
       ),
-      body: _apptStream == null
+      body: clinicId == null || clinicId.isEmpty
           ? const Center(
         child: Padding(
           padding: EdgeInsets.all(24),
@@ -92,121 +68,153 @@ class _ClinicHomeScreenState extends State<ClinicHomeScreen> {
           ),
         ),
       )
-          : StreamBuilder<List<Appointment>>(
-        stream: _apptStream,
-        builder: (context, snap) {
-          if (snap.hasError) {
-            return Center(
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Text('No se pudo cargar la agenda.\n\n${snap.error}'),
-              ),
-            );
-          }
-          if (!snap.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          final day = snap.data!
-              .where((a) => _sameDay(a.dateTime, _day))
-              .toList()
-            ..sort((a, b) => a.dateTime.compareTo(b.dateTime));
-          final pending = day
-              .where((a) => a.status == AppointmentStatus.scheduled)
-              .length;
-          final done = day
-              .where((a) => a.status == AppointmentStatus.completed)
-              .length;
+          : StreamBuilder(
+        stream: _clinics.watchOne(clinicId),
+        builder: (context, clinicSnap) {
+          final clinicName = clinicSnap.data?.name ?? 'Clínica';
 
-          return ListView(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-            children: [
-              StreamBuilder<Clinic?>(
-                stream: _clinicStream,
-                builder: (context, cs) => Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Hola, ${widget.user.name}',
-                      style: const TextStyle(
-                          color: AppColors.textSecondary),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      cs.data?.name ?? 'Tu clínica',
-                      style: const TextStyle(
-                          fontSize: 24, fontWeight: FontWeight.w800),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 14),
-              Row(
+          return StreamBuilder(
+            stream: _appointments.watchClinicAppointments(clinicId),
+            builder: (context, apptSnap) {
+              final all = apptSnap.data ?? const <Appointment>[];
+              final list = all
+                  .where((a) =>
+              a.dateTime.year == _day.year &&
+                  a.dateTime.month == _day.month &&
+                  a.dateTime.day == _day.day)
+                  .toList()
+                ..sort((a, b) => a.dateTime.compareTo(b.dateTime));
+
+              final pending = list
+                  .where((a) => a.status != AppointmentStatus.completed)
+                  .length;
+              final attended = list
+                  .where((a) => a.status == AppointmentStatus.completed)
+                  .length;
+
+              return ListView(
+                padding: const EdgeInsets.all(16),
                 children: [
-                  Expanded(
-                    child: _StatCard(
-                      label: _isToday ? 'CITAS HOY' : 'CITAS DEL DÍA',
-                      value: '${day.length}',
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: _StatCard(label: 'POR ATENDER', value: '$pending'),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: _StatCard(label: 'ATENDIDAS', value: '$done'),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 20),
-              Row(
-                children: [
-                  const Expanded(
-                    child: Text(
-                      'AGENDA DEL DÍA',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 1,
-                        color: AppColors.textSecondary,
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    visualDensity: VisualDensity.compact,
-                    icon: const Icon(Icons.chevron_left),
-                    onPressed: () => _shiftDay(-1),
-                  ),
                   Text(
-                    '${_isToday ? 'Hoy · ' : ''}${weekdayShort(_day)} ${_day.day} ${monthName(_day)}',
+                    'Hola, ${widget.user.name}',
+                    style:
+                    const TextStyle(color: AppColors.textSecondary),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    clinicName,
                     style: const TextStyle(
-                        fontSize: 12, fontWeight: FontWeight.w600),
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
-                  IconButton(
-                    visualDensity: VisualDensity.compact,
-                    icon: const Icon(Icons.chevron_right),
-                    onPressed: () => _shiftDay(1),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _StatCard(
+                          label: 'CITAS HOY',
+                          value: '${list.length}',
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: _StatCard(
+                          label: 'POR ATENDER',
+                          value: '$pending',
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: _StatCard(
+                          label: 'ATENDIDAS',
+                          value: '$attended',
+                        ),
+                      ),
+                    ],
                   ),
+                  const SizedBox(height: 20),
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          'AGENDA DEL DÍA',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.8,
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.chevron_left),
+                        onPressed: () => _shiftDay(-1),
+                      ),
+                      Text(
+                        _dayHeader(_day),
+                        style:
+                        const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.chevron_right),
+                        onPressed: () => _shiftDay(1),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  if (apptSnap.hasError)
+                    const Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Text(
+                        'No se pudo cargar la agenda.',
+                        textAlign: TextAlign.center,
+                      ),
+                    )
+                  else if (!apptSnap.hasData)
+                    const Padding(
+                      padding: EdgeInsets.all(32),
+                      child: Center(child: CircularProgressIndicator()),
+                    )
+                  else if (list.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.all(32),
+                        child: Center(
+                          child: Text(
+                            'No hay citas para este día.',
+                            style:
+                            TextStyle(color: AppColors.textSecondary),
+                          ),
+                        ),
+                      )
+                    else
+                      for (final a in list)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: _ClinicApptTile(
+                            appointment: a,
+                            onTap: () => _openDetail(a),
+                          ),
+                        ),
                 ],
-              ),
-              const SizedBox(height: 4),
-              if (day.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 32),
-                  child: Text(
-                    'No hay citas para este día.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: AppColors.textSecondary),
-                  ),
-                )
-              else
-                for (final a in day)
-                  _AppointmentRow(
-                    appointment: a,
-                    onTap: () => _openDetail(a),
-                  ),
-            ],
+              );
+            },
           );
+        },
+      ),
+    );
+  }
+
+  void _openDetail(Appointment a) {
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      builder: (_) => _DetailSheet(
+        appointment: a,
+        user: widget.user,
+        onMarkAttended: () async {
+          await _appointments.updateStatus(a.id, AppointmentStatus.completed);
+          if (mounted) Navigator.pop(context);
         },
       ),
     );
@@ -223,7 +231,7 @@ class _StatCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -236,10 +244,10 @@ class _StatCard extends StatelessWidget {
                 color: AppColors.textSecondary,
               ),
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 6),
             Text(
               value,
-              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
+              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
             ),
           ],
         ),
@@ -248,8 +256,8 @@ class _StatCard extends StatelessWidget {
   }
 }
 
-class _AppointmentRow extends StatelessWidget {
-  const _AppointmentRow({required this.appointment, required this.onTap});
+class _ClinicApptTile extends StatelessWidget {
+  const _ClinicApptTile({required this.appointment, required this.onTap});
 
   final Appointment appointment;
   final VoidCallback onTap;
@@ -257,82 +265,68 @@ class _AppointmentRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final a = appointment;
-    final title = a.petInfo.isEmpty ? a.petName : '${a.petName} · ${a.petInfo}';
-    final modeShort = a.mode == AppointmentMode.video ? 'Video' : 'Presencial';
-    final isHigh = a.triage?['priority'] == 'high';
+    final attended = a.status == AppointmentStatus.completed;
+    final isVideo = a.mode == AppointmentMode.video;
 
-    final (label, bg, fg, bar) = switch (a.status) {
-      AppointmentStatus.scheduled =>
-      ('PENDIENTE', AppColors.primarySoft, AppColors.primary, AppColors.primary),
-      AppointmentStatus.completed =>
-      ('HECHA', const Color(0xFFF1F5F9), AppColors.textSecondary, const Color(0xFFCBD5E1)),
-      AppointmentStatus.cancelled =>
-      ('CANCELADA', AppColors.dangerSoft, AppColors.danger, AppColors.danger),
-    };
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Card(
-        child: InkWell(
-          borderRadius: BorderRadius.circular(16),
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Row(
-              children: [
-                SizedBox(
-                  width: 48,
-                  child: Text(
-                    formatSlot(a.dateTime),
+    return Card(
+      child: ListTile(
+        contentPadding:
+        const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        onTap: onTap,
+        leading: SizedBox(
+          width: 62,
+          child: Text(
+            formatTime12(a.dateTime),
+            style: const TextStyle(
+              fontWeight: FontWeight.w800,
+              fontSize: 13,
+              color: AppColors.textSecondary,
+            ),
+          ),
+        ),
+        title: Row(
+          children: [
+            Container(
+              width: 3,
+              height: 36,
+              margin: const EdgeInsets.only(right: 10),
+              decoration: BoxDecoration(
+                color: attended ? AppColors.success : AppColors.primary,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    a.petInfo.isEmpty ? a.petName : '${a.petName} · ${a.petInfo}',
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  Text(
+                    '${a.ownerName.isEmpty ? 'Propietario' : a.ownerName} · ${isVideo ? 'Video' : 'Presencial'}',
                     style: const TextStyle(
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.textSecondary),
+                      fontSize: 13,
+                      color: AppColors.textSecondary,
+                    ),
                   ),
-                ),
-                Container(
-                  width: 3,
-                  height: 38,
-                  decoration: BoxDecoration(
-                    color: bar,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(title.isEmpty ? 'Mascota' : title,
-                          style: const TextStyle(fontWeight: FontWeight.w700)),
-                      const SizedBox(height: 2),
-                      Text(
-                        '${a.ownerName.isEmpty ? 'Propietario' : a.ownerName} · $modeShort',
-                        style: const TextStyle(
-                            fontSize: 12, color: AppColors.textSecondary),
-                      ),
-                    ],
-                  ),
-                ),
-                if (isHigh)
-                  const Padding(
-                    padding: EdgeInsets.only(right: 8),
-                    child: Icon(Icons.priority_high,
-                        size: 18, color: AppColors.danger),
-                  ),
-                Container(
-                  padding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: bg,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text(
-                    label,
-                    style: TextStyle(
-                        color: fg, fontSize: 10, fontWeight: FontWeight.w700),
-                  ),
-                ),
-              ],
+                ],
+              ),
+            ),
+          ],
+        ),
+        trailing: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(
+            color: attended ? AppColors.successSoft : AppColors.primarySoft,
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Text(
+            attended ? 'ATENDIDA' : 'PENDIENTE',
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              color: attended ? AppColors.success : AppColors.primary,
             ),
           ),
         ),
@@ -341,119 +335,168 @@ class _AppointmentRow extends StatelessWidget {
   }
 }
 
-class _DetailSheet extends StatefulWidget {
-  const _DetailSheet({required this.appointment, required this.onComplete});
+class _DetailSheet extends StatelessWidget {
+  const _DetailSheet({
+    required this.appointment,
+    required this.user,
+    required this.onMarkAttended,
+  });
 
   final Appointment appointment;
-  final Future<void> Function() onComplete;
+  final AppUser user;
+  final VoidCallback onMarkAttended;
 
-  @override
-  State<_DetailSheet> createState() => _DetailSheetState();
-}
-
-class _DetailSheetState extends State<_DetailSheet> {
-  bool _busy = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final a = widget.appointment;
-    final d = a.dateTime;
-    final t = a.triage == null ? null : Triage.fromMap(a.triage!);
-    final title = a.petInfo.isEmpty ? a.petName : '${a.petName} · ${a.petInfo}';
-
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(title.isEmpty ? 'Mascota' : title,
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-          const SizedBox(height: 4),
-          Text(
-            '${a.ownerName.isEmpty ? 'Propietario' : a.ownerName} · ${a.mode.label}',
-            style: const TextStyle(color: AppColors.textSecondary),
-          ),
-          Text(
-            '${weekdayShort(d)} ${d.day} · ${formatTime12(d)} · ${formatCop(a.price)}',
-            style: const TextStyle(color: AppColors.textSecondary),
-          ),
-          const SizedBox(height: 16),
-          if (t == null)
-            const Text('Sin triaje previo.',
-                style: TextStyle(color: AppColors.textSecondary))
-          else ...[
-            _PriorityBanner(priority: t.priority),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 4,
-              children: [for (final s in t.symptoms) Chip(label: Text(s))],
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Intensidad: ${t.intensityLabel} · Empezó ${_ago(t.startedDaysAgo)}',
-            ),
-            if (t.notes.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              const Text(
-                'NOTAS DEL PROPIETARIO',
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.8,
-                  color: AppColors.textSecondary,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(t.notes),
-            ],
-          ],
-          const SizedBox(height: 20),
-          if (a.status == AppointmentStatus.scheduled)
-            ElevatedButton(
-              onPressed: _busy
-                  ? null
-                  : () async {
-                setState(() => _busy = true);
-                await widget.onComplete();
-              },
-              child: const Text('Marcar como atendida'),
-            ),
-        ],
-      ),
-    );
+  String _priorityLabel(String? raw) {
+    switch (raw) {
+      case 'high':
+        return 'Alta (Urgente)';
+      case 'medium':
+        return 'Media';
+      case 'low':
+        return 'Baja';
+      default:
+        return '';
+    }
   }
 
-  String _ago(int days) =>
-      days == 0 ? 'hoy' : days == 1 ? 'hace 1 día' : 'hace $days días';
-}
-
-class _PriorityBanner extends StatelessWidget {
-  const _PriorityBanner({required this.priority});
-
-  final TriagePriority priority;
-
   @override
   Widget build(BuildContext context) {
-    final (text, bg, fg) = switch (priority) {
-      TriagePriority.low =>
-      ('Prioridad baja', AppColors.successSoft, AppColors.success),
-      TriagePriority.medium =>
-      ('Prioridad media', AppColors.primarySoft, AppColors.primary),
-      TriagePriority.high =>
-      ('Prioridad alta', AppColors.dangerSoft, AppColors.danger),
-    };
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Row(
+    final a = appointment;
+    final attended = a.status == AppointmentStatus.completed;
+    final t = a.triage;
+
+    final symptomsList = (t?['symptoms'] as List?)?.cast<String>() ?? const [];
+    final daysAgo = t?['startedDaysAgo'];
+    final intensity = t?['intensity'];
+    final priority = _priorityLabel(t?['priority'] as String?);
+    final notes = (t?['notes'] as String? ?? '').trim();
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Icon(Icons.medical_services_outlined, size: 20, color: fg),
-          const SizedBox(width: 10),
-          Text(text, style: TextStyle(color: fg, fontWeight: FontWeight.w600)),
+          Text(
+            a.petInfo.isEmpty ? a.petName : '${a.petName} · ${a.petInfo}',
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Propietario: ${a.ownerName.isEmpty ? 'No registrado' : a.ownerName}',
+            style: const TextStyle(color: AppColors.textSecondary),
+          ),
+          Text(
+            'Hora: ${formatTime12(a.dateTime)} · ${a.mode.label}',
+            style: const TextStyle(color: AppColors.textSecondary),
+          ),
+          if (t != null) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: AppColors.primarySoft,
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Text(
+                        'RESUMEN DE TRIAGE',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.7,
+                          color: AppColors.primary,
+                        ),
+                      ),
+                      const Spacer(),
+                      if (priority.isNotEmpty)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Text(
+                            'Prioridad: $priority',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.primary,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  if (symptomsList.isNotEmpty)
+                    Text(
+                      'Síntomas: ${symptomsList.join(', ')}',
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  if (daysAgo != null || intensity != null) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      [
+                        if (daysAgo != null)
+                          daysAgo == 0
+                              ? 'Inició hoy'
+                              : 'Hace $daysAgo ${daysAgo == 1 ? 'día' : 'días'}',
+                        if (intensity != null) 'Intensidad: $intensity/5',
+                      ].join(' · '),
+                      style: const TextStyle(
+                        fontSize: 13,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                  ],
+                  if (notes.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      'Notas: $notes',
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+          const SizedBox(height: 16),
+          OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              minimumSize: const Size.fromHeight(48),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+            ),
+            icon: const Icon(Icons.chat_bubble_outline),
+            label: const Text('Abrir chat / Receta digital'),
+            onPressed: () {
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => ChatScreen(
+                    appointment: a,
+                    currentUserId: user.id,
+                    currentUserName: user.name,
+                    isVet: true,
+                  ),
+                ),
+              );
+            },
+          ),
+          if (!attended) ...[
+            const SizedBox(height: 10),
+            ElevatedButton(
+              onPressed: onMarkAttended,
+              child: const Text('Marcar como atendida'),
+            ),
+          ],
         ],
       ),
     );
