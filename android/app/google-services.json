@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "472214978928",
+    "project_id": "vetocana",
+    "storage_bucket": "vetocana.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:472214978928:android:d9ce4a7de75f01afa3cfb5",
+        "android_client_info": {
+          "package_name": "com.vetocana.vetocana_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBv8CwDfyAphF3F-g5JEeR9Hy1h9JoTwb8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
