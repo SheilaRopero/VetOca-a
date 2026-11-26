@@ -17,4 +17,7 @@ class ClinicRepository {
       .doc(id)
       .snapshots()
       .map((d) => d.exists ? Clinic.fromDoc(d) : null);
+
+  Future<void> setOnDuty(String id, bool onDuty) =>
+      _db.collection('clinics').doc(id).update({'onDuty': onDuty});
 }

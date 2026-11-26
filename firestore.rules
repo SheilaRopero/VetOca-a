@@ -1,0 +1,66 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function userData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isVetOfClinic(clinicId) {
+      return isSignedIn()
+        && userData().role == 'vet'
+        && userData().clinicId == clinicId;
+    }
+
+    // Perfiles de usuario: cada usuario lee y edita solo su propio perfil
+    match /users/{userId} {
+      allow read, write: if isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Clínicas: cualquier usuario autenticado puede verlas; solo el veterinario de esa clínica edita su estado (ej. onDuty)
+    match /clinics/{clinicId} {
+      allow read: if isSignedIn();
+      allow update: if isVetOfClinic(clinicId);
+    }
+
+    // Mascotas y subcolección de vacunas: solo el dueño de la mascota
+    match /pets/{petId} {
+      allow create: if isSignedIn() && request.resource.data.ownerId == request.auth.uid;
+      allow read, update, delete: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+
+      match /vaccines/{vaccineId} {
+        allow read, write: if isSignedIn()
+          && get(/databases/$(database)/documents/pets/$(petId)).data.ownerId == request.auth.uid;
+      }
+    }
+
+    // Citas, mensajes de chat y recetas digitales
+    match /appointments/{appointmentId} {
+      allow create: if isSignedIn() && request.resource.data.ownerId == request.auth.uid;
+      allow read, update: if isSignedIn()
+        && (resource.data.ownerId == request.auth.uid || isVetOfClinic(resource.data.clinicId));
+
+      match /messages/{messageId} {
+        allow read, create: if isSignedIn()
+          && (
+            get(/databases/$(database)/documents/appointments/$(appointmentId)).data.ownerId == request.auth.uid
+            || isVetOfClinic(get(/databases/$(database)/documents/appointments/$(appointmentId)).data.clinicId)
+          );
+      }
+
+      match /prescriptions/{prescriptionId} {
+        allow read: if isSignedIn()
+          && (
+            get(/databases/$(database)/documents/appointments/$(appointmentId)).data.ownerId == request.auth.uid
+            || isVetOfClinic(get(/databases/$(database)/documents/appointments/$(appointmentId)).data.clinicId)
+          );
+        allow create, update: if isSignedIn()
+          && isVetOfClinic(get(/databases/$(database)/documents/appointments/$(appointmentId)).data.clinicId);
+      }
+    }
+  }
+}

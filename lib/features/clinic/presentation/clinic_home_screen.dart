@@ -72,18 +72,29 @@ class _ClinicHomeScreenState extends State<ClinicHomeScreen> {
         stream: _clinics.watchOne(clinicId),
         builder: (context, clinicSnap) {
           final clinicName = clinicSnap.data?.name ?? 'Clínica';
+          final isOnDuty = clinicSnap.data?.onDuty ?? false;
 
           return StreamBuilder(
             stream: _appointments.watchClinicAppointments(clinicId),
             builder: (context, apptSnap) {
               final all = apptSnap.data ?? const <Appointment>[];
+
+              bool isUrgent(Appointment a) =>
+                  a.status != AppointmentStatus.completed &&
+                      a.triage?['priority'] == 'high';
+
               final list = all
                   .where((a) =>
               a.dateTime.year == _day.year &&
                   a.dateTime.month == _day.month &&
                   a.dateTime.day == _day.day)
                   .toList()
-                ..sort((a, b) => a.dateTime.compareTo(b.dateTime));
+                ..sort((a, b) {
+                  final uA = isUrgent(a) ? 0 : 1;
+                  final uB = isUrgent(b) ? 0 : 1;
+                  if (uA != uB) return uA.compareTo(uB);
+                  return a.dateTime.compareTo(b.dateTime);
+                });
 
               final pending = list
                   .where((a) => a.status != AppointmentStatus.completed)
@@ -106,6 +117,36 @@ class _ClinicHomeScreenState extends State<ClinicHomeScreen> {
                     style: const TextStyle(
                       fontSize: 22,
                       fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Card(
+                    child: SwitchListTile(
+                      secondary: CircleAvatar(
+                        backgroundColor: isOnDuty
+                            ? AppColors.dangerSoft
+                            : AppColors.primarySoft,
+                        child: Icon(
+                          Icons.local_hospital,
+                          color: isOnDuty
+                              ? AppColors.danger
+                              : AppColors.primary,
+                        ),
+                      ),
+                      title: const Text(
+                        'Turno de urgencias 24/7',
+                        style: TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      subtitle: Text(
+                        isOnDuty
+                            ? 'Activo · visible para dueños con urgencia'
+                            : 'Inactivo · solo horario regular',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                      activeThumbColor: AppColors.danger,
+                      value: isOnDuty,
+                      onChanged: (val) =>
+                          _clinics.setOnDuty(clinicId, val),
                     ),
                   ),
                   const SizedBox(height: 16),
@@ -208,13 +249,14 @@ class _ClinicHomeScreenState extends State<ClinicHomeScreen> {
   void _openDetail(Appointment a) {
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       showDragHandle: true,
-      builder: (_) => _DetailSheet(
+      builder: (sheetContext) => _DetailSheet(
         appointment: a,
         user: widget.user,
         onMarkAttended: () async {
           await _appointments.updateStatus(a.id, AppointmentStatus.completed);
-          if (mounted) Navigator.pop(context);
+          if (sheetContext.mounted) Navigator.pop(sheetContext);
         },
       ),
     );
@@ -267,8 +309,22 @@ class _ClinicApptTile extends StatelessWidget {
     final a = appointment;
     final attended = a.status == AppointmentStatus.completed;
     final isVideo = a.mode == AppointmentMode.video;
+    final urgent = !attended && a.triage?['priority'] == 'high';
+
+    final accentColor = attended
+        ? AppColors.success
+        : (urgent ? AppColors.danger : AppColors.primary);
 
     return Card(
+      shape: urgent
+          ? RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(
+          color: AppColors.danger.withValues(alpha: 0.45),
+          width: 1.5,
+        ),
+      )
+          : null,
       child: ListTile(
         contentPadding:
         const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
@@ -277,10 +333,10 @@ class _ClinicApptTile extends StatelessWidget {
           width: 62,
           child: Text(
             formatTime12(a.dateTime),
-            style: const TextStyle(
+            style: TextStyle(
               fontWeight: FontWeight.w800,
               fontSize: 13,
-              color: AppColors.textSecondary,
+              color: urgent ? AppColors.danger : AppColors.textSecondary,
             ),
           ),
         ),
@@ -291,7 +347,7 @@ class _ClinicApptTile extends StatelessWidget {
               height: 36,
               margin: const EdgeInsets.only(right: 10),
               decoration: BoxDecoration(
-                color: attended ? AppColors.success : AppColors.primary,
+                color: accentColor,
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
@@ -318,16 +374,28 @@ class _ClinicApptTile extends StatelessWidget {
         trailing: Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
           decoration: BoxDecoration(
-            color: attended ? AppColors.successSoft : AppColors.primarySoft,
+            color: attended
+                ? AppColors.successSoft
+                : (urgent ? AppColors.dangerSoft : AppColors.primarySoft),
             borderRadius: BorderRadius.circular(20),
           ),
-          child: Text(
-            attended ? 'ATENDIDA' : 'PENDIENTE',
-            style: TextStyle(
-              fontSize: 10,
-              fontWeight: FontWeight.w700,
-              color: attended ? AppColors.success : AppColors.primary,
-            ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (urgent) ...[
+                const Icon(Icons.priority_high,
+                    size: 12, color: AppColors.danger),
+                const SizedBox(width: 2),
+              ],
+              Text(
+                attended ? 'ATENDIDA' : (urgent ? 'URGENCIA' : 'PENDIENTE'),
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                  color: accentColor,
+                ),
+              ),
+            ],
           ),
         ),
       ),
@@ -335,7 +403,7 @@ class _ClinicApptTile extends StatelessWidget {
   }
 }
 
-class _DetailSheet extends StatelessWidget {
+class _DetailSheet extends StatefulWidget {
   const _DetailSheet({
     required this.appointment,
     required this.user,
@@ -344,7 +412,14 @@ class _DetailSheet extends StatelessWidget {
 
   final Appointment appointment;
   final AppUser user;
-  final VoidCallback onMarkAttended;
+  final Future<void> Function() onMarkAttended;
+
+  @override
+  State<_DetailSheet> createState() => _DetailSheetState();
+}
+
+class _DetailSheetState extends State<_DetailSheet> {
+  bool _saving = false;
 
   String _priorityLabel(String? raw) {
     switch (raw) {
@@ -359,9 +434,19 @@ class _DetailSheet extends StatelessWidget {
     }
   }
 
+  Future<void> _handleMarkAttended() async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    try {
+      await widget.onMarkAttended();
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final a = appointment;
+    final a = widget.appointment;
     final attended = a.status == AppointmentStatus.completed;
     final t = a.triage;
 
@@ -371,133 +456,144 @@ class _DetailSheet extends StatelessWidget {
     final priority = _priorityLabel(t?['priority'] as String?);
     final notes = (t?['notes'] as String? ?? '').trim();
 
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            a.petInfo.isEmpty ? a.petName : '${a.petName} · ${a.petInfo}',
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            'Propietario: ${a.ownerName.isEmpty ? 'No registrado' : a.ownerName}',
-            style: const TextStyle(color: AppColors.textSecondary),
-          ),
-          Text(
-            'Hora: ${formatTime12(a.dateTime)} · ${a.mode.label}',
-            style: const TextStyle(color: AppColors.textSecondary),
-          ),
-          if (t != null) ...[
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: AppColors.primarySoft,
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      const Text(
-                        'RESUMEN DE TRIAGE',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 0.7,
-                          color: AppColors.primary,
-                        ),
-                      ),
-                      const Spacer(),
-                      if (priority.isNotEmpty)
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(10),
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: EdgeInsets.fromLTRB(
+          20,
+          0,
+          20,
+          24 + MediaQuery.of(context).viewInsets.bottom,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              a.petInfo.isEmpty ? a.petName : '${a.petName} · ${a.petInfo}',
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Propietario: ${a.ownerName.isEmpty ? 'No registrado' : a.ownerName}',
+              style: const TextStyle(color: AppColors.textSecondary),
+            ),
+            Text(
+              'Hora: ${formatTime12(a.dateTime)} · ${a.mode.label}',
+              style: const TextStyle(color: AppColors.textSecondary),
+            ),
+            if (t != null) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: AppColors.primarySoft,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Text(
+                          'RESUMEN DE TRIAGE',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.7,
+                            color: AppColors.primary,
                           ),
-                          child: Text(
-                            'Prioridad: $priority',
-                            style: const TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w700,
-                              color: AppColors.primary,
+                        ),
+                        const Spacer(),
+                        if (priority.isNotEmpty)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Text(
+                              'Prioridad: $priority',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.primary,
+                              ),
                             ),
                           ),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  if (symptomsList.isNotEmpty)
-                    Text(
-                      'Síntomas: ${symptomsList.join(', ')}',
-                      style: const TextStyle(fontWeight: FontWeight.w600),
+                      ],
                     ),
-                  if (daysAgo != null || intensity != null) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      [
-                        if (daysAgo != null)
-                          daysAgo == 0
-                              ? 'Inició hoy'
-                              : 'Hace $daysAgo ${daysAgo == 1 ? 'día' : 'días'}',
-                        if (intensity != null) 'Intensidad: $intensity/5',
-                      ].join(' · '),
-                      style: const TextStyle(
-                        fontSize: 13,
-                        color: AppColors.textSecondary,
+                    const SizedBox(height: 8),
+                    if (symptomsList.isNotEmpty)
+                      Text(
+                        'Síntomas: ${symptomsList.join(', ')}',
+                        style: const TextStyle(fontWeight: FontWeight.w600),
                       ),
-                    ),
+                    if (daysAgo != null || intensity != null) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        [
+                          if (daysAgo != null)
+                            daysAgo == 0
+                                ? 'Inició hoy'
+                                : 'Hace $daysAgo ${daysAgo == 1 ? 'día' : 'días'}',
+                          if (intensity != null) 'Intensidad: $intensity/5',
+                        ].join(' · '),
+                        style: const TextStyle(
+                          fontSize: 13,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                    ],
+                    if (notes.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        'Notas: $notes',
+                        style: const TextStyle(fontSize: 13),
+                      ),
+                    ],
                   ],
-                  if (notes.isNotEmpty) ...[
-                    const SizedBox(height: 6),
-                    Text(
-                      'Notas: $notes',
-                      style: const TextStyle(fontSize: 13),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ],
-          const SizedBox(height: 16),
-          OutlinedButton.icon(
-            style: OutlinedButton.styleFrom(
-              minimumSize: const Size.fromHeight(48),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-            ),
-            icon: const Icon(Icons.chat_bubble_outline),
-            label: const Text('Abrir chat / Receta digital'),
-            onPressed: () {
-              Navigator.pop(context);
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => ChatScreen(
-                    appointment: a,
-                    currentUserId: user.id,
-                    currentUserName: user.name,
-                    isVet: true,
-                  ),
                 ),
-              );
-            },
-          ),
-          if (!attended) ...[
-            const SizedBox(height: 10),
-            ElevatedButton(
-              onPressed: onMarkAttended,
-              child: const Text('Marcar como atendida'),
+              ),
+            ],
+            const SizedBox(height: 16),
+            OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size.fromHeight(48),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+              ),
+              icon: const Icon(Icons.chat_bubble_outline),
+              label: const Text('Abrir chat / Receta digital'),
+              onPressed: _saving
+                  ? null
+                  : () {
+                final nav = Navigator.of(context);
+                nav.pop();
+                nav.push(
+                  MaterialPageRoute(
+                    builder: (_) => ChatScreen(
+                      appointment: a,
+                      currentUserId: widget.user.id,
+                      currentUserName: widget.user.name,
+                      isVet: true,
+                    ),
+                  ),
+                );
+              },
             ),
+            if (!attended) ...[
+              const SizedBox(height: 10),
+              ElevatedButton(
+                onPressed: _saving ? null : _handleMarkAttended,
+                child: Text(
+                  _saving ? 'Guardando...' : 'Marcar como atendida',
+                ),
+              ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }

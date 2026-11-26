@@ -5,10 +5,16 @@ import '../models/triage.dart';
 import 'schedule_screen.dart';
 
 class TriageScreen extends StatefulWidget {
-  const TriageScreen({super.key, required this.pet, required this.ownerName});
+  const TriageScreen({
+    super.key,
+    required this.pet,
+    required this.ownerName,
+    this.isUrgent = false,
+  });
 
   final Pet pet;
   final String ownerName;
+  final bool isUrgent;
 
   @override
   State<TriageScreen> createState() => _TriageScreenState();
@@ -24,9 +30,16 @@ class _TriageScreenState extends State<TriageScreen> {
 
   final _selected = <String>{};
   final _notes = TextEditingController();
-  int _intensity = 3;
-  int _days = 1;
+  late int _intensity;
+  int _days = 0;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _intensity = widget.isUrgent ? 4 : 3;
+    _days = widget.isUrgent ? 0 : 1;
+  }
 
   @override
   void dispose() {
@@ -84,7 +97,9 @@ class _TriageScreenState extends State<TriageScreen> {
     };
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Triaje previo')),
+      appBar: AppBar(
+        title: Text(widget.isUrgent ? 'Triaje urgente' : 'Triaje previo'),
+      ),
       body: SafeArea(
         child: Column(
           children: [
@@ -94,15 +109,24 @@ class _TriageScreenState extends State<TriageScreen> {
                 children: [
                   Card(
                     child: ListTile(
-                      leading: const CircleAvatar(
-                        backgroundColor: AppColors.primarySoft,
-                        child: Icon(Icons.pets, color: AppColors.primary),
+                      leading: CircleAvatar(
+                        backgroundColor: widget.isUrgent
+                            ? AppColors.dangerSoft
+                            : AppColors.primarySoft,
+                        child: Icon(
+                          Icons.pets,
+                          color: widget.isUrgent
+                              ? AppColors.danger
+                              : AppColors.primary,
+                        ),
                       ),
                       title: Text(
                         pet.breed.isEmpty ? pet.name : '${pet.name} · ${pet.breed}',
                         style: const TextStyle(fontWeight: FontWeight.w700),
                       ),
-                      subtitle: const Text('Nueva consulta'),
+                      subtitle: Text(
+                        widget.isUrgent ? 'Consulta de urgencia 24/7' : 'Nueva consulta',
+                      ),
                     ),
                   ),
                   const SizedBox(height: 20),
